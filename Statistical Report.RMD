@@ -1,0 +1,489 @@
+---
+title: 'Pain Management in The ICU Longitudinal Study: Statistical Report'
+author: "Dr. Benjamin Moran"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: 
+    toc: true
+    toc_float: true
+editor_options: 
+  markdown: 
+    wrap: 72
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+```
+
+
+## Part 1: Methods and Analysis
+
+[**Aims/Objectives**]{.ul}
+
+1.  Describe the pain assessment tools and frequency used in ICU
+    patients.
+2.  Describe the opioid management of ICU patients.
+3.  Describe the adjuvant analgesia used in ICU patients.
+4.  Describe the Trajectory of Pain Scores and Opioid Dosing in Mechanically Ventilated ICU Patients.
+5.  Describe the Trajectory of Sedation Scores and Sedation Dosing in MV ICU Patients.
+6.  Describe the Trajectory of Analgesia and Sedation Delivery over a 24 hour period.
+
+
+[**Methods**]{.ul}
+
+This manuscript has been prepared in accordance with the Strengthening
+the Reporting of Observational Studies in Epidemiology (STROBE)
+Statement [@vonelm2008].
+
+[**Statistical Analysis**]{.ul}
+
+Descriptive statistics were used for demographic and clinical data.
+Normally distributed variables were reported as means (standard
+deviations) and non-normally distributed variables as medians
+(interquartile ranges). Proportions were reported as percentages.
+No assumptions were made about missing data. Statistical analysis
+was performed using R Version 4.1.0 and RStudio Version 1.4.1714
+(RStudio Team (2021). RStudio: Integrated Development for R. RStudio,
+PBC, Boston, MA URL <http://www.rstudio.com/>) statistical software.
+Packages used for analysis included tidyverse, ggplot2, gtsummary and gt.
+*p* values \<0.05 were considered significant.\
+
+
+\
+\
+\
+## Part 2: Patient Demographics
+
+```{r echo=FALSE, fig.align='center', message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(gtsummary)
+# Open and attach CSV file #
+demogr <- readxl::read_excel("Data/Test CCLHD_Gos 01_01_22 to 30_03_22 Version_2.xlsx")
+
+# Create Age Variable from DOB and ICU Admission Date
+demogr <- demogr %>%
+  mutate(age = lubridate::as.duration(`Admission Date` - PatientDOB) |>  as.numeric('years'))
+
+# Create ICU LOS Variable
+demogr <- demogr %>%
+  mutate(icu_los = lubridate::as.duration(`ICU Discharge Date/Time` - `Admission Date`) |>  as.numeric('days'))
+
+# Create Hospital LOS Variable
+demogr <- demogr %>%
+  mutate(hosp_los = lubridate::as.duration(`Hospital Discharge Date/Time` - HospAD) |>  as.numeric('days'))
+
+# Create Variables for admission diagnoses
+demogr <- demogr |> 
+  mutate(AP3Diag = case_when(
+    (AP3Diagnosis...11>=1301) & (AP3Diagnosis...11<=1304) ~ "Post-Operative",
+    (AP3Diagnosis...11>=1401) & (AP3Diagnosis...11<=1413) ~ "Post-Operative",
+    (AP3Diagnosis...11>=1602) & (AP3Diagnosis...11<=1605) ~ "Post-Operative",
+    (AP3Diagnosis...11>=1701) & (AP3Diagnosis...11<=1705) ~ "Post-Operative",
+    (AP3Diagnosis...11>=1801) & (AP3Diagnosis...11<=1803) ~ "Post-Operative",
+    (AP3Diagnosis...11>=1902) & (AP3Diagnosis...11<=1904) ~ "Post-Operative",
+    (AP3Diagnosis...11==2101) ~ "Post-Operative",
+    (AP3Diagnosis...11==2201) ~ "Post-Operative",
+    (AP3Diagnosis...11>=101) & (AP3Diagnosis...11<=111) ~ "Medical",
+    (AP3Diagnosis...11>=201) & (AP3Diagnosis...11<=213) ~ "Medical",
+    (AP3Diagnosis...11>=301) & (AP3Diagnosis...11<=313) ~ "Medical",
+    (AP3Diagnosis...11>=406) & (AP3Diagnosis...11<407) ~ "Medical",
+    (AP3Diagnosis...11>=501) & (AP3Diagnosis...11<=504) ~ "Sepsis",
+    (AP3Diagnosis...11>601) & (AP3Diagnosis...11<=605) ~ "Trauma",
+    (AP3Diagnosis...11>=701) & (AP3Diagnosis...11<=704) ~ "Medical",
+    (AP3Diagnosis...11>=801) & (AP3Diagnosis...11<=802.11) ~ "Medical",
+    (AP3Diagnosis...11>=901) & (AP3Diagnosis...11<=903) ~ "Medical",
+    (AP3Diagnosis...11>=1101) & (AP3Diagnosis...11<=1102) ~ "Medical",
+    (AP3Diagnosis...11 == 212.03 | AP3Diagnosis...11 == 213.02) ~ "COVID"))
+
+# Reorder Apache3 Diagnosis
+demogr <- demogr %>% mutate(AP3Diag = factor(AP3Diag, levels = c("Medical", "Sepsis", "Trauma", "Post-Operative", "COVID")))
+
+# Reorder Admission Source
+demogr <- demogr %>% mutate(`source of admission` = factor(`source of admission`, levels = c("Emergency department", "OT/Recovery", "Ward", "Other hospital ICU/HDU")))
+
+# Create COVID Binary Variable
+demogr <- demogr %>%
+  mutate(COVID = as.character(AP3Diagnosis...11 %in% c(212.03, 213.02))) 
+
+# Convert Clinical Frailty Score (CFS) to Categorical
+demogr <- demogr %>%
+  mutate(CFS = case_when(
+    Fraility %in% c("Very Fit", "Well", "Managing Well") ~ "Fit",
+    Fraility %in% "Vulnerable" ~ "Vulnerable",
+    Fraility %in% c("Mildly Frail", "Moderately Frail", "Severely Frail", "Very Severely Frail", "Terminally Ill") ~ "Frail")) %>% 
+  # Reorder Apache3
+  mutate(CFS = factor(CFS, levels = c("Fit", "Vulnerable", "Frail")))
+
+# Combine patient data that were reintubated (same ICU admission, but have duplicate rows to account for different ventilation event) 
+demogr <- demogr |> 
+  group_by(PatientID) |> # This identifier is the same as long as it's the same ICU admission
+  mutate(`Vent start time` = list(`Vent start time`), `Vent End time` = list(`Vent End time`)) |>
+  unnest_wider(c(`Vent start time`, `Vent End time`), names_sep = "_") |> 
+  distinct() |> # removes duplicate rows
+  mutate(retube = ifelse(is.na(`Vent start time_2`), 0, 1)) # Create binary variable for whether the pt was reintubated
+
+
+# Combine patient data that had separate ICU admissions (they have separate PatientID numbers)
+demogr <- demogr |> 
+  group_by(PatientDOB, PatientSex, HospAD) |> # Only way to group the variables to determine if it's the same patient as the PatientID won't be the same
+  mutate(`Admission Date` = list(`Admission Date`), `ICU Discharge Date/Time` = list(`ICU Discharge Date/Time`)) |>
+  unnest_wider(c(`Admission Date`, `ICU Discharge Date/Time`), names_sep = "_") |> 
+  mutate(readmit = ifelse(is.na(`Admission Date_2`), 0, 1)) # Create binary variable for whether the pt was readmitted
+
+# NOTE- the readmit variable will report the same patient as they haven't been combined.
+
+# Create Duration of Ventilation Variable
+demogr <- demogr %>% 
+  mutate(vent_dur = lubridate::as.duration(`Vent End time` - `Vent start time`) %>% as.numeric('days'))
+
+
+# Generate Table 1
+demogr %>% 
+  select(age, PatientSex, APACHE3, AP3Diag, 'source of admission', vent_dur, CFS, icu_los, `ICU Mortality`, hosp_los, `Hospital Mortality`) %>% 
+  tbl_summary(missing = "no",
+              label = list(age="Age in years, median (IQR)",
+                           PatientSex="Female, number (%)",
+                           APACHE3="APACHE III score, median (IQR)",
+                           AP3Diag="Admission diagnosis, number (%)",
+                           'source of admission' ="Admission source, number (%)",
+                           CFS = "Frailty, number (%)",
+                           icu_los = "ICU length of stay, median days (IQR)",
+                           hosp_los = "Hospital length of stay, median days (IQR)",
+                           vent_dur = "Duration of ventilation, median days (IQR)"),
+              value = list(PatientSex ~ "Female",
+                           'ICU Mortality' ~ "Yes",
+                           'Hospital Mortality' ~ "Yes" ),
+              statistic = list(all_continuous() ~ "{median} ({p25}-{p75})",
+                               all_categorical() ~ "{n} ({p}%)")) %>%  
+  bold_labels() %>% 
+  italicize_levels() %>% 
+  modify_caption("**Table 1. Patient Demographics**") %>% 
+  
+  modify_table_body(
+    ~.x %>% 
+      
+      # add demographic grouping variable
+      rbind(
+        tibble(
+          variable="Demographics",
+          var_type=NA,
+          var_label = "Demographics",
+          row_type="label",
+          label="Demographics",
+          stat_0= NA)) %>% 
+      
+      # add admission grouping variable
+      rbind(
+        tibble(
+          variable="Admission Characteristics",
+          var_type=NA,
+          var_label = "Admission Characteristics",
+          row_type="label",
+          label="Admission Characteristics",
+          stat_0= NA)) %>%  
+      
+      # add outcome grouping variable
+      rbind(
+        tibble(
+          variable="Outcome Characteristics",
+          var_type=NA,
+          var_label = "Outcome Characteristics",
+          row_type="label",
+          label="Outcome Characteristics",
+          stat_0= NA)) %>%  
+      
+      # specify the position you want these in
+      
+      arrange(factor(variable, levels=c("Demographics",
+                                        "age",
+                                        "PatientSex",
+                                        "Admission Characteristics",
+                                        "APACHE3",
+                                        "AP3Diag",
+                                        "source of admission",
+                                        "CFS",
+                                        "Outcome Characteristics",
+                                        "vent_dur",
+                                        "icu_los",
+                                        "ICU Mortality",
+                                        "hosp_los",
+                                        "Hospital Mortality"))))%>%
+  
+  # and you can then indent the actual variables
+  modify_column_indent(columns=label, rows=variable %in% c("age",
+                                                           "PatientSex",
+                                                           "APACHE3",
+                                                           "AP3Diag",
+                                                           "source of admission",
+                                                           "CFS",
+                                                           "vent_dur",
+                                                           "icu_los",
+                                                           "ICU Mortality",
+                                                           "hosp_los",
+                                                           "Hospital Mortality"))%>%
+  
+  # and double indent their levels
+  modify_column_indent(columns=label, rows= (variable %in% c("AP3Diag",
+                                                             "source of admission",
+                                                             "CFS") 
+                                             & row_type=="level"),
+                       double_indent=T)
+
+```
+\
+\
+\
+## Part 3: Daily Pain Scores
+```{r echo=FALSE, fig.align='center', message=FALSE, warning=FALSE}
+
+library(janitor)
+library(tidyverse)
+library(lubridate)
+library(openxlsx)
+
+# Import data
+pain <- read_excel("2. Daily Pain Scores.xlsx")
+
+# Convert Time integer into Datetime
+pain <- pain |> mutate(Time = convertToDateTime(pain$Time, origin = "1900-01-01"))
+
+#Clean Column Names
+pain <- pain |>  
+  clean_names()
+
+# Clean Up Data Frame
+pain <- pain |>  
+  filter(ventday != "NULL", assessment_tool !="NPS_static", assessment_tool != "NPS_dyn") |> 
+  mutate(ventday = as.numeric(ventday))
+
+# Create Time Difference Variable Between Pain Scores
+pain <- pain |> 
+  group_by(patient_id) |> 
+  complete(time = seq.POSIXt(min(ceiling_date(time , 'day')), 
+                             max(floor_date(time , 'day')), by = 'day')) |> # Generates a time point at midnight
+  arrange(patient_id, time) |> 
+  fill(c(patient_id, assessment_tool, score)) |> fill(ventday, .direction = "up") |> 
+  mutate(time_diff_hours = as.numeric(lead(time) - time, units = 'hours')) 
+
+# Change a ventialtion day that was erroneous
+# Need to find 
+pain <- pain |> 
+  mutate(ventday = case_when(
+    patient_id == 20849 & time == "2022-01-29 00:00:00" ~ 1,
+    TRUE ~ ventday
+  ))
+
+# Create pain categories
+pain <- pain %>% 
+  mutate(pain_cat = case_when(
+    # CPOT Assessment Tool
+    (assessment_tool == "CPOT") & (score == 0) ~ "None",
+    (assessment_tool == "CPOT") & (score >= 1) & (score <=2) ~ "Mild",
+    (assessment_tool == "CPOT") & (score >= 3) & (score <=5) ~ "Moderate",
+    (assessment_tool == "CPOT") & (score >= 6) & (score <=8) ~ "Severe",
+    # NPS_static Assessment Tool
+    (assessment_tool == "NPS_static") & (score == 0) ~ "None",
+    (assessment_tool == "NPS_static") & (score >= 1) & (score <=3) ~ "Mild",
+    (assessment_tool == "NPS_static") & (score >= 4) & (score <=7) ~ "Moderate",
+    (assessment_tool == "NPS_static") & (score >= 8) & (score <=10) ~ "Severe",
+    # NPS_dyn Assessment Tool
+    (assessment_tool == "NPS_dyn") & (score == 0) ~ "None",
+    (assessment_tool == "NPS_dyn") & (score >= 1) & (score <=3) ~ "Mild",
+    (assessment_tool == "NPS_dyn") & (score >= 4) & (score <=7) ~ "Moderate",
+    (assessment_tool == "NPS_dyn") & (score >= 8) & (score <=10) ~ "Severe",
+    # BPS Assessment Tool
+    (assessment_tool == "BPS") & (score <= 3) ~ "None",
+    (assessment_tool == "BPS") & (score >= 4) & (score <=6) ~ "Mild",
+    (assessment_tool == "BPS") & (score >= 7) & (score <=9) ~ "Moderate",
+    (assessment_tool == "BPS") & (score >= 10) & (score <=12) ~ "Severe"
+  ))
+
+# Create Time in No Pain
+pain <- pain %>% 
+  mutate(pain_none = ifelse(pain_cat == "None", time_diff_hours, 0))
+
+# Create Time in Mild Pain
+pain <- pain %>% 
+  mutate(pain_mild = ifelse(pain_cat == "Mild", time_diff_hours, 0))
+
+# Create Time in Moderate Pain
+pain <- pain %>% 
+  mutate(pain_mod = ifelse(pain_cat == "Moderate", time_diff_hours, 0))
+
+# Create Time in Severe Pain
+pain <- pain %>% 
+  mutate(pain_sev = ifelse(pain_cat == "Severe", time_diff_hours, 0))
+
+# Create Time in Mild to Severe Pain (ie any pain)
+pain <- pain |> 
+  mutate(pain_mild_sev = pain_mild + pain_mod + pain_sev)
+
+# Create Time in Moderate to Severe Pain
+pain <- pain %>% 
+  mutate(pain_mod_sev = pain_mod + pain_sev)
+
+# Convert NAs into 0
+pain <- pain |> 
+  mutate(across(where(is.numeric), replace_na, 0))
+
+# Create Variable of % Time in Each Pain Category Per Day (Excluding Ventday = NULL and NPS scores as they usually are done with CPOT in ventilated patients)
+pain <- pain |> 
+  select(patient_id, logical_unit_id, ventday, pain_none, pain_mild, pain_mod, pain_sev, pain_mild_sev, pain_mod_sev) |> 
+  mutate(across(where(is.numeric), round, 1)) |> 
+  group_by(patient_id, ventday) |>  
+  summarise(across(pain_none: pain_mod_sev, sum))
+
+# Check Number of Hours
+pain <- pain |> 
+  mutate(total_pain_hrs = pain_none + pain_mild + pain_mod + pain_sev)
+
+# Remove numbers at end of variable names
+new_var_name <- c(pain_none = "pain_none_1", pain_mild = "pain_mild_1", pain_mod = "pain_mod_1", pain_sev = "pain_sev_1", pain_mod_sev = "pain_mod_sev_1")
+pain <- pain %>% 
+  rename(all_of(new_var_name)) |> 
+  arrange(patient_id, ventday)
+
+
+# Convert to wide format
+pain <- pain %>% 
+  pivot_wider(
+    id_cols = patient_id,
+    names_from = c(ventday),
+    names_glue = "vent{ventday}_{.value}",
+    values_from = c(pain_none, pain_mild, pain_mod, pain_sev, pain_mod_sev),
+    values_fill = 0)
+
+```
+\
+\
+\
+## Part 4: Daily Opioid Consumption
+
+```{r echo=FALSE, fig.align='center', message=FALSE, warning=FALSE}
+
+opioid <- read_excel("3. Daily Opioids.xlsx")
+library(janitor)
+library(tidyverse)
+library(lubridate)
+library(zoo)
+
+#Clean Column Names
+opioid <- opioid %>% 
+  clean_names()
+
+# Rename variables naming opioid infusions and dosage time intervals
+opioid_var <- c(morphinf = "medication_5", fentinf = "medication_14", hydroinf = "medication_23",
+                morph0_3 = "x00_03_6", morph3_6 = "x03_06_7", morph6_9 = "x06_09_8", morph9_12 = "x09_12_9", morph12_15 = "x12_15_10", morph15_18 = "x15_18_11", morph18_21 = "x18_21_12", morph21_24 = "x21_00_13",
+                fent0_3 = "d00_03", fent3_6 = "d03_06", fent6_9 = "d06_09", fent9_12 = "d09_12", fent12_15 = "d12_15", fent15_18 = "d15_18", fent18_21 = "d18_21", fent21_24 = "d21_00",
+                hydro0_3 = "x00_03_24", hydro3_6 = "x03_06_25", hydro6_9 = "x06_09_26", hydro9_12 = "x09_12_27", hydro12_15 = "x12_15_28", hydro15_18 = "x15_18_29", hydro18_21 = "x18_21_30", hydro21_24 = "x21_00_31")
+
+opioid <- opioid %>% 
+  rename(all_of(opioid_var))
+
+# Change character to numeric
+opioid <- opioid %>% 
+  mutate(across(c(`morph0_3`:`morph21_24`, `fent0_3`:`fent21_24`, `hydro0_3`:`hydro21_24`), as.numeric))
+ 
+# Change NA to 0
+opioid <- opioid %>% 
+  replace(is.na(.), 0)
+
+# Create Time Epochs OME
+opioid <- opioid %>% 
+  rowwise() %>% 
+  mutate(
+    ome0_3 = morph0_3*3 + fent0_3*2 + hydro0_3*3,
+    ome3_6 = morph3_6*3 + fent3_6*2 + hydro3_6*3,
+    ome6_9 = morph6_9*3 + fent6_9*2 + hydro6_9*3,
+    ome9_12 = morph9_12*3 + fent9_12*2 + hydro9_12*3,
+    ome12_15 = morph12_15*3 + fent12_15*2 + hydro12_15*3,
+    ome15_18 = morph15_18*3 + fent15_18*2 + hydro15_18*3,
+    ome18_21 = morph18_21*3 + fent18_21*2 + hydro18_21*3,
+    ome21_24 = morph21_24*3 + fent21_24*2 + hydro21_24*3
+    ) %>%
+  ungroup()
+
+# Graph Opioid OME 
+opioid_long <- opioid %>% 
+  pivot_longer(c(`ome0_3`, `ome3_6`, `ome6_9`, `ome9_12`, `ome12_15`, `ome15_18`, `ome18_21`, `ome21_24`), 
+               names_to = "Time")
+
+# Reorder Time Epochs
+opioid_long <- opioid_long %>% 
+  mutate(Time = factor(Time, levels = c("ome0_3", "ome3_6", "ome6_9", "ome9_12", "ome12_15", "ome15_18", "ome18_21", "ome21_24")))
+
+# Plot Geom_point with median and IQR
+ome_time_mediqr <- ggplot(data = opioid_long, aes(x=Time,
+                                                  y = value))+
+  geom_pointrange(mapping = aes(x = Time, y = value),
+                  stat = "summary",
+                  fun.min = function(z) {quantile(z,0.25)},
+                  fun.max = function(z) {quantile(z,0.75)},
+                  fun = median)+
+  theme_bw()+
+  labs(x="Time", y="Opioid Dose (mg OME)", title="Daily Opioid Dose Over Time")
+
+# Plot Geom_point with median
+ome_time_median <- opioid_long %>% 
+  group_by(Time) %>% 
+  mutate(median = median(value)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(x=Time, y = median))+
+  geom_line(aes(x=Time, y = median))+
+  theme_bw()+
+  labs(x="Time", y="Opioid Dose (mg OME)", title="Daily Opioid Dose Over Time")
+
+# Plot with Mean and Error Bars
+ome_time_meanerr <- opioid_long %>% 
+  group_by(Time) %>% 
+  mutate(mean = mean(value)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_point(aes(x=Time, y = mean))+
+  geom_line(aes(x=Time, y = mean))+
+  theme_bw()+
+  labs(x="Time", y="Opioid Dose (mg OME)", title="Daily Opioid Dose Over Time")
+  
+
+# Create Daily Opioid Dose (OME)
+opioid <- opioid %>% 
+  rowwise() %>% 
+  mutate(
+    morphinfome = (sum(c_across(morph0_3:morph21_24), na.rm = F)*3),
+    fentinfome = (sum(c_across(fent0_3:fent21_24), na.rm = F)*2),
+    hydroinfome = (sum(c_across(hydro0_3:hydro21_24), na.rm = F)*3)
+  ) %>% 
+  ungroup()
+
+# Create Total Daily OME
+opioid <- opioid %>% 
+  mutate(
+    total_ome = (morphinfome + fentinfome + hydroinfome)
+  )
+
+# Graph Days of Admission with OME Dose
+ome_daysofadm <- opioid %>% 
+  group_by(da_yofadmission) %>% 
+  mutate(mean = mean(total_ome)) %>% 
+  ungroup() %>% 
+  ggplot()+
+  geom_line(aes(x=da_yofadmission, y = mean))+
+  theme_bw()+
+  labs(x="Days of Admission", y="Opioid Dose (mg OME)", title="Daily Opioid Dose Over Time")+
+  coord_cartesian(x = c(0, 7))
+
+hist(opioid$total_ome)
+
+# Replace 0 values with the average between the 2 nonzero numbers (as doses may be validated a couple of hours after they are given)
+#opioid <- opioid %>% 
+  #replace(.=="NULL", NA) %>% 
+  #ifelse(is.na(x) | is.na(c(0, head(x,-1))), 
+       #with(rle(na.locf(x, fromLast=T)), rep(values/lengths, lengths)), x)
+
+
+```
+
